@@ -12,6 +12,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from typing import List, Dict, Optional
 from uuid import UUID
 
 import asyncpg
@@ -20,10 +21,16 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.auth import verify_api_key
-from backend.db import get_conn
-from backend.exceptions import DatabaseError, Ingestion Error, ValidationError
+from backend.config import LLM_PROVIDER
+from backend.db_adapter import get_conn
+from backend.exceptions import DatabaseError, IngestionError, ValidationError
 from backend.services.ingestion import ingest_repo
-from backend.services.agent import run_agent
+
+# Import appropriate agent service based on configuration
+if LLM_PROVIDER == "ollama":
+    from backend.services.agent_ollama import run_agent
+else:
+    from backend.services.agent import run_agent
 
 logger = logging.getLogger("falcon.api")
 router = APIRouter(prefix="/repos", tags=["repos"])
@@ -86,7 +93,7 @@ class ChatRequest(BaseModel):
     question: str = Field(
         ..., min_length=1, max_length=5000, description="Question to ask about the repository"
     )
-    history: list[dict] | None = Field(
+    history: Optional[List[Dict]] = Field(
         None, max_length=50, description="Chat history (max 50 messages)"
     )
 
@@ -99,7 +106,7 @@ class ChatRequest(BaseModel):
         return v
 
     @field_validator("history")
-    def validate_history(cls, v: list[dict] | None) -> list[dict] | None:
+    def validate_history(cls, v: Optional[List[Dict]]) -> Optional[List[Dict]]:
         """
         Validate chat history structure and content.
 

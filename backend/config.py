@@ -8,6 +8,10 @@ with a clear error message if required values are missing or invalid.
 import os
 import sys
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 
 def _get_required_env(key: str) -> str:
     """
@@ -68,14 +72,23 @@ def _parse_int(value: str, key: str) -> int:
 
 # ==================== REQUIRED CONFIGURATION ====================
 
-# OpenAI API key - required for agent functionality
-OPENAI_API_KEY = _get_required_env("OPENAI_API_KEY")
-
-# PostgreSQL database URL
+# Database configuration
 DATABASE_URL = _get_required_env("DATABASE_URL")
+USE_SQLITE_FOR_TESTING = _get_optional_env("USE_SQLITE_FOR_TESTING", "false").lower() == "true"
 
 
 # ==================== OPTIONAL CONFIGURATION ====================
+
+# LLM Configuration - use either OpenAI or Ollama
+# For local testing with Ollama (free)
+OLLAMA_BASE_URL = _get_optional_env("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = _get_optional_env("OLLAMA_MODEL", "mistral:7b-instruct")
+
+# For production with OpenAI (paid)
+OPENAI_API_KEY = _get_optional_env("OPENAI_API_KEY", "")
+
+# LLM provider selection
+LLM_PROVIDER = _get_optional_env("LLM_PROVIDER", "ollama")  # "ollama" or "openai"
 
 # Database connection pool settings
 DB_MIN_CONNECTIONS = _parse_int(_get_optional_env("DB_MIN_CONNECTIONS", "2"), "DB_MIN_CONNECTIONS")
@@ -145,3 +158,20 @@ if not CORS_ORIGINS:
 if ENVIRONMENT == "production" and not API_KEY:
     print("WARNING: API_KEY is not set in production environment!", file=sys.stderr)
     print("Authentication will be disabled. This is a security risk.", file=sys.stderr)
+
+# Validate LLM provider configuration
+VALID_LLM_PROVIDERS = ["ollama", "openai"]
+if LLM_PROVIDER not in VALID_LLM_PROVIDERS:
+    print(
+        f"ERROR: LLM_PROVIDER must be one of {VALID_LLM_PROVIDERS}, got: {LLM_PROVIDER}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+# Validate LLM provider requirements
+if LLM_PROVIDER == "openai" and not OPENAI_API_KEY:
+    print("ERROR: OPENAI_API_KEY is required when LLM_PROVIDER=openai", file=sys.stderr)
+    sys.exit(1)
+
+if LLM_PROVIDER == "ollama":
+    print(f"INFO: Using Ollama at {OLLAMA_BASE_URL} with model {OLLAMA_MODEL}", file=sys.stderr)

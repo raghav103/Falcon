@@ -10,12 +10,13 @@ Usage in FastAPI:
 """
 
 import logging
+from typing import Optional
 import asyncpg
 
 from backend.config import DATABASE_URL, DB_MIN_CONNECTIONS, DB_MAX_CONNECTIONS
 
 logger = logging.getLogger("falcon.db")
-pool: asyncpg.Pool | None = None
+pool: Optional[asyncpg.Pool] = None
 
 
 async def init_db():

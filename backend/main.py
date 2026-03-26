@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from backend.config import LOG_LEVEL, ENVIRONMENT, CORS_ORIGINS
 from backend.exceptions import FalconError
 from backend.logging_config import setup_logging
-from backend.db import init_db, close_db
+from backend.db_adapter import init_db, close_db
 from backend.routers.repos import router as repos_router
 
 # Set up logging before anything else
