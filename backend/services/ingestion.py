@@ -10,6 +10,7 @@ After ingestion, only the database has the repo's data — no files on disk.
 """
 
 import asyncio
+import logging
 import os
 import tempfile
 import uuid
@@ -18,6 +19,8 @@ from pathlib import Path
 import asyncpg
 
 from backend.config import MAX_FILE_SIZE
+
+logger = logging.getLogger("falcon.ingestion")
 
 
 # ---------------------------------------------------------------------------
@@ -74,12 +77,14 @@ async def ingest_repo(conn: asyncpg.Connection, url: str) -> dict:
     Raises:
         Exception on clone failure or DB errors (caller should handle).
     """
+    logger.info(f"Starting ingestion for URL: {url}")
 
     # --- 1. Dedup check ---
     existing = await conn.fetchrow(
         "SELECT id, status FROM repos WHERE url = $1", url
     )
     if existing:
+        logger.info(f"Repository already exists: {existing['id']} (status: {existing['status']})")
         return {
             "repo_id": str(existing["id"]),
             "status": "already_exists",
@@ -88,6 +93,7 @@ async def ingest_repo(conn: asyncpg.Connection, url: str) -> dict:
     # --- 2. Insert repo row ---
     repo_name = _extract_repo_name(url)
     repo_id = uuid.uuid4()
+    logger.info(f"Creating repo record: {repo_id} - {repo_name}")
 
     await conn.execute(
         """
@@ -101,13 +107,18 @@ async def ingest_repo(conn: asyncpg.Connection, url: str) -> dict:
         # --- 3. Clone into tempdir ---
         with tempfile.TemporaryDirectory() as tmpdir:
             clone_path = os.path.join(tmpdir, "repo")
+            logger.info(f"Cloning repository to temporary directory: {clone_path}")
             await _git_clone(url, clone_path)
+            logger.info("Repository cloned successfully")
 
             # --- 4–7. Walk, filter, compute fields, read content ---
+            logger.info("Collecting file records")
             records = _collect_file_records(clone_path, repo_id)
+            logger.info(f"Collected {len(records)} file records")
 
             # --- 8. Batch insert ---
             if records:
+                logger.info("Batch inserting file records into database")
                 await conn.copy_records_to_table(
                     "files",
                     records=records,
@@ -116,11 +127,13 @@ async def ingest_repo(conn: asyncpg.Connection, url: str) -> dict:
                         "parent_path", "depth", "is_directory", "content",
                     ],
                 )
+                logger.info("File records inserted successfully")
 
         # --- 9. Update status ---
         await conn.execute(
             "UPDATE repos SET status = 'ready' WHERE id = $1", repo_id
         )
+        logger.info(f"Ingestion complete for repo {repo_id}: {len(records)} files")
 
         return {
             "repo_id": str(repo_id),
@@ -128,8 +141,9 @@ async def ingest_repo(conn: asyncpg.Connection, url: str) -> dict:
             "file_count": len(records),
         }
 
-    except Exception:
+    except Exception as e:
         # Mark as failed so it can be retried
+        logger.error(f"Ingestion failed for repo {repo_id}: {e}", exc_info=True)
         await conn.execute(
             "UPDATE repos SET status = 'error' WHERE id = $1", repo_id
         )
@@ -142,7 +156,7 @@ async def ingest_repo(conn: asyncpg.Connection, url: str) -> dict:
 def _extract_repo_name(url: str) -> str:
     """
     "https://github.com/expressjs/express.git" → "expressjs/express"
-    "git@bitbucket.org:team/repo.git"          → "team/repo"
+    "git@github.com:owner/repo.git"            → "owner/repo"
     """
     # Strip trailing .git and slashes
     clean = url.rstrip("/").removesuffix(".git")

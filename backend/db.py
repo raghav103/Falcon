@@ -9,11 +9,12 @@ Usage in FastAPI:
         ...
 """
 
+import logging
 import asyncpg
 
 from backend.config import DATABASE_URL, DB_MIN_CONNECTIONS, DB_MAX_CONNECTIONS
 
-
+logger = logging.getLogger("falcon.db")
 pool: asyncpg.Pool | None = None
 
 
@@ -23,22 +24,42 @@ async def init_db():
     Call once at app startup.
     """
     global pool
-    pool = await asyncpg.create_pool(
-        DATABASE_URL,
-        min_size=DB_MIN_CONNECTIONS,
-        max_size=DB_MAX_CONNECTIONS,
+    logger.info(
+        f"Creating database connection pool (min={DB_MIN_CONNECTIONS}, max={DB_MAX_CONNECTIONS})"
     )
 
-    async with pool.acquire() as conn:
-        await _create_schema(conn)
+    try:
+        pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=DB_MIN_CONNECTIONS,
+            max_size=DB_MAX_CONNECTIONS,
+        )
+        logger.info("Database connection pool created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create database connection pool: {e}")
+        raise RuntimeError(
+            f"Database connection failed: {e}. Please check DATABASE_URL and ensure PostgreSQL is running."
+        )
+
+    try:
+        async with pool.acquire() as conn:
+            await _create_schema(conn)
+        logger.info("Database schema initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database schema: {e}")
+        await pool.close()
+        pool = None
+        raise RuntimeError(f"Database schema initialization failed: {e}")
 
 
 async def close_db():
     """Close the pool. Call at app shutdown."""
     global pool
     if pool:
+        logger.info("Closing database connection pool")
         await pool.close()
         pool = None
+        logger.info("Database connection pool closed")
 
 
 async def get_conn():
@@ -58,7 +79,10 @@ async def get_conn():
 # Schema — idempotent (IF NOT EXISTS everywhere)
 # ---------------------------------------------------------------------------
 async def _create_schema(conn: asyncpg.Connection):
+    logger.debug("Creating database schema (idempotent)")
+
     await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+    logger.debug("pg_trgm extension verified")
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS repos (
@@ -69,6 +93,7 @@ async def _create_schema(conn: asyncpg.Connection):
             status TEXT DEFAULT 'pending'
         );
     """)
+    logger.debug("repos table verified")
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
@@ -84,6 +109,7 @@ async def _create_schema(conn: asyncpg.Connection):
             UNIQUE(repo_id, path)
         );
     """)
+    logger.debug("files table verified")
 
     # Indexes — each one supports a specific tool query pattern.
     # CREATE INDEX IF NOT EXISTS is safe to run repeatedly.
